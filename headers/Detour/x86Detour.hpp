@@ -24,12 +24,10 @@ public:
 	x86Detour(const uint64_t fnAddress, const uint64_t fnCallback, uint64_t* userTrampVar, PLH::ADisassembler& dis);
 
 	x86Detour(const char* fnAddress, const char* fnCallback, uint64_t* userTrampVar, PLH::ADisassembler& dis);
-
+	virtual ~x86Detour() = default;
 	virtual bool hook() override;
 
 	Mode getArchType() const;
-
-	insts_t makeJmp(const uint64_t address, const uint64_t destination) const;
 
 	uint8_t getJmpSize() const;
 private:

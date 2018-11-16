@@ -27,7 +27,7 @@ public:
 		cs_option(m_capHandle, CS_OPT_DETAIL, CS_OPT_ON);
 	}
 
-	~CapstoneDisassembler() {
+	virtual ~CapstoneDisassembler() {
 		if (m_capHandle)
 			cs_close(&m_capHandle);
 		m_capHandle = NULL;
@@ -35,12 +35,6 @@ public:
 
 	virtual std::vector<PLH::Instruction>
 		disassemble(uint64_t firstInstruction, uint64_t start, uint64_t end) override;
-
-	virtual void writeEncoding(const PLH::Instruction& instruction) const override;
-
-	virtual bool isConditionalJump(const PLH::Instruction& instruction) const override;
-
-	virtual bool isFuncEnd(const PLH::Instruction& instructioni) const override;
 private:
 	x86_reg getIpReg() const {
 		if (m_mode == PLH::Mode::x64)
