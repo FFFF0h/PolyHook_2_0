@@ -1,7 +1,6 @@
-#include "headers/Tests/TestEffectTracker.hpp"
+#include "polyhook2/Tests/TestEffectTracker.hpp"
 
-
-Effect::Effect() : m_uid(UID::singleton()) {
+Effect::Effect() : m_uid(PLH::UID::singleton()) {
 	m_executed = false;
 }
 
@@ -31,10 +30,9 @@ Effect EffectTracker::PopEffect() {
 
 Effect& EffectTracker::PeakEffect() {
 	if (m_effectQ.size() <= 0) {
-		__debugbreak();
+		PolyHook2DebugBreak();
 		PushEffect();
 	}
 		
 	return m_effectQ.back();
 }
-

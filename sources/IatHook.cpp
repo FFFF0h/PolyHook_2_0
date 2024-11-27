@@ -1,15 +1,16 @@
-#include "headers/PE/IatHook.hpp"
+#include "polyhook2/PE/IatHook.hpp"
 
 PLH::IatHook::IatHook(const std::string& dllName, const std::string& apiName, const char* fnCallback, uint64_t* userOrigVar, const std::wstring& moduleName) 
 	: IatHook(dllName, apiName, (uint64_t)fnCallback, userOrigVar, moduleName)
 {}
 
 PLH::IatHook::IatHook(const std::string& dllName, const std::string& apiName, const uint64_t fnCallback, uint64_t* userOrigVar, const std::wstring& moduleName) 
-	: m_moduleName(moduleName)
-    , m_dllName(dllName)
+	: m_dllName(dllName)
     , m_apiName(apiName)
-    , m_userOrigVar(userOrigVar)
+    , m_moduleName(moduleName)
     , m_fnCallback(fnCallback)
+    , m_userOrigVar(userOrigVar)
+	, m_origFunc(0)
 {}
 
 bool PLH::IatHook::hook() {
@@ -19,7 +20,7 @@ bool PLH::IatHook::hook() {
 		return false;
 
 	// IAT is by default a writeable section
-	MemoryProtector prot((uint64_t)&pThunk->u1.Function, sizeof(uintptr_t), ProtFlag::R | ProtFlag::W);
+	MemoryProtector prot((uint64_t)&pThunk->u1.Function, sizeof(uintptr_t), ProtFlag::R | ProtFlag::W, *this);
 	m_origFunc = (uint64_t)pThunk->u1.Function;
 	pThunk->u1.Function = (uintptr_t)m_fnCallback;
 	m_hooked = true;
@@ -37,7 +38,7 @@ bool PLH::IatHook::unHook() {
 	if (pThunk == nullptr)
 		return false;
 
-	MemoryProtector prot((uint64_t)&pThunk->u1.Function, sizeof(uintptr_t), ProtFlag::R | ProtFlag::W);
+	MemoryProtector prot((uint64_t)&pThunk->u1.Function, sizeof(uintptr_t), ProtFlag::R | ProtFlag::W, *this);
 	pThunk->u1.Function = (uintptr_t)m_origFunc;
 	m_hooked = false;
 	*m_userOrigVar = NULL;
@@ -52,11 +53,11 @@ IMAGE_THUNK_DATA* PLH::IatHook::FindIatThunk(const std::string& dllName, const s
 #endif
 
 	IMAGE_THUNK_DATA* pThunk = nullptr;
-	PEB_LDR_DATA* ldr = (PPEB_LDR_DATA)peb->Ldr;
+	auto* ldr = (PPEB_LDR_DATA)peb->Ldr;
 
 	// find loaded module from peb
-	for (LDR_DATA_TABLE_ENTRY* dte = (LDR_DATA_TABLE_ENTRY*)ldr->InLoadOrderModuleList.Flink;
-		 dte->DllBase != NULL;
+	for (auto* dte = (LDR_DATA_TABLE_ENTRY*)ldr->InLoadOrderModuleList.Flink;
+		 dte->DllBase != nullptr;
 		 dte = (LDR_DATA_TABLE_ENTRY*)dte->InLoadOrderLinks.Flink) {
 
 		// TODO: create stricmp for UNICODE_STRING because this is really bad for performance
@@ -71,10 +72,9 @@ IMAGE_THUNK_DATA* PLH::IatHook::FindIatThunk(const std::string& dllName, const s
 			return pThunk;
 	}
 
-	if (pThunk == nullptr) {
-		ErrorLog::singleton().push("Failed to find thunk for api from requested dll", ErrorLevel::SEV);
-	}
-	return pThunk;
+	Log::log("Failed to find thunk for api from requested dll", ErrorLevel::SEV);
+
+	return nullptr;
 }
 
 IMAGE_THUNK_DATA* PLH::IatHook::FindIatThunkInModule(void* moduleBase, const std::string& dllName, const std::string& apiName) {
@@ -82,16 +82,16 @@ IMAGE_THUNK_DATA* PLH::IatHook::FindIatThunkInModule(void* moduleBase, const std
 	if (moduleBase == nullptr)
 		return nullptr;
 
-	IMAGE_DOS_HEADER* pDos = (IMAGE_DOS_HEADER*)moduleBase;
-	IMAGE_NT_HEADERS* pNT = RVA2VA(IMAGE_NT_HEADERS*, moduleBase, pDos->e_lfanew);
-	IMAGE_DATA_DIRECTORY* pDataDir = (IMAGE_DATA_DIRECTORY*)pNT->OptionalHeader.DataDirectory;
+	auto* pDos = (IMAGE_DOS_HEADER*)moduleBase;
+	auto* pNT = RVA2VA(IMAGE_NT_HEADERS*, moduleBase, pDos->e_lfanew);
+	auto* pDataDir = (IMAGE_DATA_DIRECTORY*)pNT->OptionalHeader.DataDirectory;
 
 	if (pDataDir[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress == NULL) {
-		ErrorLog::singleton().push("PEs without import tables are unsupported", ErrorLevel::SEV);
+		Log::log("PEs without import tables are unsupported", ErrorLevel::SEV);
 		return nullptr;
 	}
 
-	IMAGE_IMPORT_DESCRIPTOR* pImports = (IMAGE_IMPORT_DESCRIPTOR*)RVA2VA(uintptr_t, moduleBase, pDataDir[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
+	auto* pImports = (IMAGE_IMPORT_DESCRIPTOR*)RVA2VA(uintptr_t, moduleBase, pDataDir[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
 
 	// import entry with null fields marks end
 	for (uint_fast16_t i = 0; pImports[i].Name != NULL; i++) {
@@ -100,15 +100,15 @@ IMAGE_THUNK_DATA* PLH::IatHook::FindIatThunkInModule(void* moduleBase, const std
 			continue;
 		
 		// Original holds the API Names
-		PIMAGE_THUNK_DATA pOriginalThunk = (PIMAGE_THUNK_DATA)
+        auto pOriginalThunk = (PIMAGE_THUNK_DATA)
 			RVA2VA(uintptr_t, moduleBase, pImports[i].OriginalFirstThunk);
 
 		// FirstThunk is overwritten by loader with API addresses, we change this
-		PIMAGE_THUNK_DATA pThunk = (PIMAGE_THUNK_DATA)
+        auto pThunk = (PIMAGE_THUNK_DATA)
 			RVA2VA(uintptr_t, moduleBase, pImports[i].FirstThunk);
 
 		if (!pOriginalThunk) {
-			ErrorLog::singleton().push("IAT's without valid original thunk are un-supported", ErrorLevel::SEV);
+			Log::log("IAT's without valid original thunk are un-supported", ErrorLevel::SEV);
 			return nullptr;
 		}
 
@@ -119,7 +119,7 @@ IMAGE_THUNK_DATA* PLH::IatHook::FindIatThunkInModule(void* moduleBase, const std
 				continue;
 			}
 
-			PIMAGE_IMPORT_BY_NAME pImport = (PIMAGE_IMPORT_BY_NAME)
+			auto pImport = (PIMAGE_IMPORT_BY_NAME)
 				RVA2VA(uintptr_t, moduleBase, pOriginalThunk->u1.AddressOfData);
 
             if(my_narrow_stricmp(pImport->Name, apiName.c_str()) != 0)
@@ -129,6 +129,6 @@ IMAGE_THUNK_DATA* PLH::IatHook::FindIatThunkInModule(void* moduleBase, const std
 		}
 	}
 
-	ErrorLog::singleton().push("Thunk not found before end of IAT", ErrorLevel::SEV);
+	Log::log("Thunk not found before end of IAT", ErrorLevel::SEV);
 	return nullptr;
 }
